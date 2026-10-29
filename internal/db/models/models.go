@@ -76,16 +76,17 @@ type APIKey struct {
 type UserGame struct {
 	bun.BaseModel `bun:"table:user_games"`
 
-	ID             string    `bun:"id,pk"              json:"id"`
-	UserID         string    `bun:"user_id,notnull"    json:"user_id"`
-	GameID         int32     `bun:"game_id,notnull"    json:"game_id"`
-	PlayStatus     *string   `bun:"play_status"        json:"play_status"`
-	PersonalRating *int32    `bun:"personal_rating"    json:"personal_rating"`
-	IsLoved        bool      `bun:"is_loved,notnull"      json:"is_loved"`
-	IsWishlisted   bool      `bun:"is_wishlisted,notnull" json:"is_wishlisted"`
-	PersonalNotes  *string   `bun:"personal_notes"        json:"personal_notes"`
-	CreatedAt      time.Time `bun:"created_at,notnull" json:"created_at"`
-	UpdatedAt      time.Time `bun:"updated_at,notnull" json:"updated_at"`
+	ID               string    `bun:"id,pk"              json:"id"`
+	UserID           string    `bun:"user_id,notnull"    json:"user_id"`
+	GameID           int32     `bun:"game_id,notnull"    json:"game_id"`
+	PlayStatus       *string   `bun:"play_status"        json:"play_status"`
+	PlayStatusManual bool      `bun:"play_status_manual" json:"-"`
+	PersonalRating   *int32    `bun:"personal_rating"    json:"personal_rating"`
+	IsLoved          bool      `bun:"is_loved,notnull"      json:"is_loved"`
+	IsWishlisted     bool      `bun:"is_wishlisted,notnull" json:"is_wishlisted"`
+	PersonalNotes    *string   `bun:"personal_notes"        json:"personal_notes"`
+	CreatedAt        time.Time `bun:"created_at,notnull" json:"created_at"`
+	UpdatedAt        time.Time `bun:"updated_at,notnull" json:"updated_at"`
 
 	Game      *Game              `bun:"rel:belongs-to,join:game_id=id"    json:"game,omitempty"`
 	Platforms []UserGamePlatform `bun:"rel:has-many,join:id=user_game_id" json:"platforms"`
@@ -93,7 +94,8 @@ type UserGame struct {
 }
 
 type UserGamePlatform struct {
-	bun.BaseModel `bun:"table:user_game_platforms"`
+	OwnershipManual bool `bun:"ownership_manual" json:"-"`
+	bun.BaseModel   `bun:"table:user_game_platforms"`
 
 	ID                   string     `bun:"id,pk"                        json:"id"`
 	UserGameID           string     `bun:"user_game_id,notnull"         json:"user_game_id"`
@@ -110,9 +112,11 @@ type UserGamePlatform struct {
 	CreatedAt            time.Time  `bun:"created_at,notnull"           json:"created_at"`
 	UpdatedAt            time.Time  `bun:"updated_at,notnull"           json:"updated_at"`
 
-	PlatformRecord   *Platform     `bun:"rel:belongs-to,join:platform=name"        json:"-"`
-	StorefrontRecord *Storefront   `bun:"rel:belongs-to,join:storefront=name"      json:"-"`
-	ExternalGame     *ExternalGame `bun:"rel:belongs-to,join:external_game_id=id"  json:"-"`
+	ManualProgress   *ProgressManualOverride `bun:"rel:has-one,join:id=user_game_platform_id" json:"-"`
+	ObservedProgress *ProgressObservation    `bun:"rel:has-one,join:id=user_game_platform_id" json:"-"`
+	PlatformRecord   *Platform               `bun:"rel:belongs-to,join:platform=name"        json:"-"`
+	StorefrontRecord *Storefront             `bun:"rel:belongs-to,join:storefront=name"      json:"-"`
+	ExternalGame     *ExternalGame           `bun:"rel:belongs-to,join:external_game_id=id"  json:"-"`
 }
 
 type Platform struct {
@@ -284,4 +288,22 @@ type PoolGame struct {
 	UserGameID string    `bun:"user_game_id,notnull"  json:"user_game_id"`
 	Position   *int      `bun:"position"              json:"position"`
 	CreatedAt  time.Time `bun:"created_at,notnull"    json:"created_at"`
+}
+
+// Progress records inherit ownership exclusively through their platform FK.
+type ProgressManualOverride struct {
+	bun.BaseModel        `bun:"table:progress_manual_overrides"`
+	UserGamePlatformID   string    `bun:"user_game_platform_id,pk" json:"-"`
+	HoursPlayed          *float64  `bun:"hours_played" json:"hours_played"`
+	AchievementsUnlocked *int      `bun:"achievements_unlocked" json:"achievements_unlocked"`
+	AchievementsTotal    *int      `bun:"achievements_total" json:"achievements_total"`
+	UpdatedAt            time.Time `bun:"updated_at" json:"updated_at"`
+}
+type ProgressObservation struct {
+	bun.BaseModel        `bun:"table:progress_observations"`
+	UserGamePlatformID   string    `bun:"user_game_platform_id,pk" json:"-"`
+	HoursPlayed          *float64  `bun:"hours_played" json:"hours_played"`
+	AchievementsUnlocked *int      `bun:"achievements_unlocked" json:"achievements_unlocked"`
+	AchievementsTotal    *int      `bun:"achievements_total" json:"achievements_total"`
+	ObservedAt           time.Time `bun:"observed_at" json:"observed_at"`
 }

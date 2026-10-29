@@ -23,6 +23,7 @@ func promoteToInProgressIfPlayed(ctx context.Context, db bun.IDB, userGameID str
 		 SET play_status = 'in_progress', updated_at = now()
 		 WHERE id = ?
 		   AND play_status = 'not_started'
+           AND NOT play_status_manual
 		   AND (SELECT COALESCE(SUM(hours_played), 0)
 		        FROM user_game_platforms WHERE user_game_id = ?) > 0`,
 		userGameID, userGameID,

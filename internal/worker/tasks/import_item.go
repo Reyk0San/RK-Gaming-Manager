@@ -77,12 +77,15 @@ type importGameData struct {
 }
 
 type importPlatformData struct {
-	Platform        string   `json:"platform"`
-	Storefront      string   `json:"storefront"`
-	OwnershipStatus *string  `json:"ownership_status"`
-	AcquiredDate    *string  `json:"acquired_date"` // date-only or RFC3339
-	HoursPlayed     *float64 `json:"hours_played"`
-	IsAvailable     *bool    `json:"is_available"`
+	AchievementsUnlocked *int                    `json:"achievements_unlocked"`
+	AchievementsTotal    *int                    `json:"achievements_total"`
+	Progress             *usergame.ProgressState `json:"progress"`
+	Platform             string                  `json:"platform"`
+	Storefront           string                  `json:"storefront"`
+	OwnershipStatus      *string                 `json:"ownership_status"`
+	AcquiredDate         *string                 `json:"acquired_date"` // date-only or RFC3339
+	HoursPlayed          *float64                `json:"hours_played"`
+	IsAvailable          *bool                   `json:"is_available"`
 }
 
 // parseFlexibleDate accepts either a date-only string ("2006-01-02") or a full
@@ -226,12 +229,15 @@ func (w *ImportItemWorker) Work(ctx context.Context, job *river.Job[ImportItemAr
 		}
 
 		plats = append(plats, usergame.PlatformInput{
-			Platform:        &platformName,
-			Storefront:      storefrontPtr,
-			IsAvailable:     pd.IsAvailable, // nil ⇒ Acquire defaults to true
-			HoursPlayed:     pd.HoursPlayed,
-			OwnershipStatus: ownership,
-			AcquiredDate:    parseFlexibleDate(pd.AcquiredDate),
+			Platform:             &platformName,
+			Storefront:           storefrontPtr,
+			IsAvailable:          pd.IsAvailable, // nil ⇒ Acquire defaults to true
+			HoursPlayed:          pd.HoursPlayed,
+			AchievementsUnlocked: pd.AchievementsUnlocked,
+			AchievementsTotal:    pd.AchievementsTotal,
+			Progress:             pd.Progress,
+			OwnershipStatus:      ownership,
+			AcquiredDate:         parseFlexibleDate(pd.AcquiredDate),
 			// SyncFromSource intentionally omitted (false) — imports are not storefront syncs.
 		})
 	}

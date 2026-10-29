@@ -459,6 +459,7 @@ func (h *UserGamesHandler) HandleCreateUserGame(c *echo.Context) error {
 		}
 		plats = append(plats, usergame.PlatformInput{
 			Platform: p.Platform, Storefront: p.Storefront, HoursPlayed: p.HoursPlayed,
+			AchievementsUnlocked: p.AchievementsUnlocked, AchievementsTotal: p.AchievementsTotal,
 			OwnershipStatus: p.OwnershipStatus, IsAvailable: p.IsAvailable, AcquiredDate: acquired,
 		})
 	}
@@ -885,12 +886,17 @@ func (h *UserGamesHandler) verifyUserGameOwnership(ctx context.Context, userGame
 
 // platformRequest is the bind target for platform create/update.
 type platformRequest struct {
-	Platform        *string  `json:"platform"`
-	Storefront      *string  `json:"storefront"`
-	IsAvailable     *bool    `json:"is_available"`
-	HoursPlayed     *float64 `json:"hours_played"`
-	OwnershipStatus *string  `json:"ownership_status"`
-	AcquiredDate    *string  `json:"acquired_date"`
+	ClearHoursOverride                bool     `json:"clear_hours_override"`
+	ClearAchievementsUnlockedOverride bool     `json:"clear_achievements_unlocked_override"`
+	ClearAchievementsTotalOverride    bool     `json:"clear_achievements_total_override"`
+	AchievementsUnlocked              *int     `json:"achievements_unlocked"`
+	AchievementsTotal                 *int     `json:"achievements_total"`
+	Platform                          *string  `json:"platform"`
+	Storefront                        *string  `json:"storefront"`
+	IsAvailable                       *bool    `json:"is_available"`
+	HoursPlayed                       *float64 `json:"hours_played"`
+	OwnershipStatus                   *string  `json:"ownership_status"`
+	AcquiredDate                      *string  `json:"acquired_date"`
 }
 
 // parseAcquiredDate parses the request's acquired_date string into a time. It
@@ -979,12 +985,14 @@ func (h *UserGamesHandler) HandleCreatePlatform(c *echo.Context) error {
 	}
 
 	platIn := usergame.PlatformInput{
-		Platform:        req.Platform,
-		Storefront:      req.Storefront,
-		HoursPlayed:     req.HoursPlayed,
-		OwnershipStatus: req.OwnershipStatus,
-		IsAvailable:     req.IsAvailable,
-		AcquiredDate:    acquiredDate,
+		Platform:             req.Platform,
+		Storefront:           req.Storefront,
+		HoursPlayed:          req.HoursPlayed,
+		AchievementsUnlocked: req.AchievementsUnlocked,
+		AchievementsTotal:    req.AchievementsTotal,
+		OwnershipStatus:      req.OwnershipStatus,
+		IsAvailable:          req.IsAvailable,
+		AcquiredDate:         acquiredDate,
 	}
 
 	res, err := usergame.AddPlatform(ctx, h.db, usergame.AddPlatformParams{
@@ -1077,11 +1085,16 @@ func (h *UserGamesHandler) HandleUpdatePlatform(c *echo.Context) error {
 	}
 
 	fields := usergame.PlatformInput{
-		Platform:        req.Platform,
-		Storefront:      req.Storefront,
-		IsAvailable:     req.IsAvailable,
-		HoursPlayed:     req.HoursPlayed,
-		OwnershipStatus: req.OwnershipStatus,
+		ClearHoursOverride:                req.ClearHoursOverride,
+		ClearAchievementsUnlockedOverride: req.ClearAchievementsUnlockedOverride,
+		ClearAchievementsTotalOverride:    req.ClearAchievementsTotalOverride,
+		Platform:                          req.Platform,
+		Storefront:                        req.Storefront,
+		IsAvailable:                       req.IsAvailable,
+		HoursPlayed:                       req.HoursPlayed,
+		AchievementsUnlocked:              req.AchievementsUnlocked,
+		AchievementsTotal:                 req.AchievementsTotal,
+		OwnershipStatus:                   req.OwnershipStatus,
 	}
 	if acquiredDateProvided {
 		if acquiredDate == nil {

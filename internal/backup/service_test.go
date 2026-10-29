@@ -265,12 +265,25 @@ func TestRestoreBackup(t *testing.T) {
 
 	svc := backup.NewService(db, dsn, backupDir, storageDir, "0.1.0")
 
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`INSERT INTO platforms (name,display_name) VALUES ('pc-windows','PC (Windows)') ON CONFLICT DO NOTHING`,
+		`INSERT INTO users (id,username,password_hash) VALUES ('progress-owner','progress-owner','x')`,
+		`INSERT INTO games (id,title) VALUES (9900,'Backup progress')`,
+		`INSERT INTO user_games (id,user_id,game_id,play_status_manual) VALUES ('progress-game','progress-owner',9900,true)`,
+		`INSERT INTO user_game_platforms (id,user_game_id,platform,hours_played) VALUES ('progress-platform','progress-game','pc-windows',0)`,
+		`INSERT INTO progress_manual_overrides (user_game_platform_id,hours_played) VALUES ('progress-platform',0)`,
+		`INSERT INTO progress_observations (user_game_platform_id,hours_played) VALUES ('progress-platform',42)`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
 	id, err := svc.CreateBackup("manual")
 	if err != nil {
 		t.Fatalf("CreateBackup: %v", err)
 	}
 
-	ctx := context.Background()
 	_, _ = db.ExecContext(ctx, "INSERT INTO users (id) VALUES ('will-be-restored')")
 
 	var restoredDB *bun.DB
@@ -302,6 +315,15 @@ func TestRestoreBackup(t *testing.T) {
 		queryDB = db
 	}
 
+	var manual, observed, effective float64
+	if err := queryDB.NewRaw(`SELECT m.hours_played,o.hours_played,p.hours_played
+        FROM user_game_platforms p JOIN progress_manual_overrides m ON m.user_game_platform_id=p.id
+        JOIN progress_observations o ON o.user_game_platform_id=p.id WHERE p.id='progress-platform'`).Scan(ctx, &manual, &observed, &effective); err != nil {
+		t.Fatal(err)
+	}
+	if manual != 0 || observed != 42 || effective != 0 {
+		t.Fatalf("backup lost progress layers: %v %v %v", manual, observed, effective)
+	}
 	var count int
 	err = queryDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE id = 'will-be-restored'").Scan(&count)
 	if err != nil {

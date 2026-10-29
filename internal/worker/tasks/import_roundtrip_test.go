@@ -65,6 +65,13 @@ func TestImport_RoundTripPreservesUserData(t *testing.T) {
 		t.Fatalf("insert ugp: %v", err)
 	}
 
+	if _, err := testDB.NewRaw(`INSERT INTO progress_manual_overrides (user_game_platform_id,hours_played,achievements_unlocked) VALUES (?,12.5,0)`, ugp.ID).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.NewRaw(`INSERT INTO progress_observations (user_game_platform_id,hours_played,achievements_unlocked,achievements_total) VALUES (?,80,7,10)`, ugp.ID).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+
 	color := "#7C3AED"
 	tag := &models.Tag{ID: uuid.NewString(), UserID: srcUser, Name: "metroidvania", Color: &color, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	if _, err := testDB.NewInsert().Model(tag).Exec(ctx); err != nil {
@@ -185,6 +192,17 @@ func TestImport_RoundTripPreservesUserData(t *testing.T) {
 	if err := testDB.NewSelect().Model(&gotP).Where("user_game_id = ?", got.ID).Scan(ctx); err != nil {
 		t.Fatalf("dst platform not found: %v", err)
 	}
+	var manualHours, observedHours float64
+	var manualCount, observedCount int
+	if err := testDB.NewRaw(`SELECT m.hours_played,o.hours_played,m.achievements_unlocked,o.achievements_unlocked
+        FROM progress_manual_overrides m JOIN progress_observations o USING (user_game_platform_id)
+        WHERE m.user_game_platform_id=?`, gotP.ID).Scan(ctx, &manualHours, &observedHours, &manualCount, &observedCount); err != nil {
+		t.Fatal(err)
+	}
+	if manualHours != 12.5 || observedHours != 80 || manualCount != 0 || observedCount != 7 {
+		t.Fatalf("provenance roundtrip: %v %v %v %v", manualHours, observedHours, manualCount, observedCount)
+	}
+
 	if gotP.Platform == nil || *gotP.Platform != "pc-windows" {
 		t.Errorf("platform = %v, want pc-windows", gotP.Platform)
 	}

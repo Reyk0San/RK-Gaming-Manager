@@ -1,5 +1,10 @@
 # RK Gaming Manager — audit et fondations
 
+> Cet audit décrit la phase 1. La protection désormais implémentée dans les
+> chemins historiques, ses migrations et limites sont décrites dans
+> [Phase 2A](RK-PHASE-2A.md). Les mentions « lot suivant » ci-dessous
+> appartiennent à l’état audité de la phase 1.
+
 ## Périmètre et état
 
 Audit du fork `Reyk0San/RK-Gaming-Manager`, branche `develop`, commit
