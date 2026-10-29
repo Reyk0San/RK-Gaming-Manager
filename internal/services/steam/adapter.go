@@ -50,12 +50,13 @@ func NewAdapterForTests(client *Client, apiKey, steamID string, retryWait time.D
 // it to the first platform row only.
 //
 // On HTTP 429 from the Steam Store API, GetLibrary sleeps a fixed duration and retries
-// the same appid indefinitely until success or context cancellation — we must not silently
+// the same appid with bounded exponential backoff until success or cancellation — we must not silently
 // drop any entries.
 func (a *Adapter) GetLibrary(ctx context.Context, batchSize int, onBatch func([]storefrontadapter.ExternalGameEntry) error) error {
 	if batchSize <= 0 {
 		batchSize = 10
 	}
+	observedAt := time.Now().UTC()
 	owned, err := a.client.GetOwnedGames(ctx, a.apiKey, a.steamID)
 	if errors.Is(err, ErrAPIKeyRejected) {
 		return fmt.Errorf("%w: steam API key rejected", storefrontadapter.ErrCredentials)
@@ -102,9 +103,21 @@ func (a *Adapter) GetLibrary(ctx context.Context, batchSize int, onBatch func([]
 				platforms = []string{"pc-windows"}
 			}
 
-			unlocked, total := a.fetchAchievements(ctx, og)
+			progress := &Progress{AccountID: a.steamID, ObservedAt: observedAt, HoursPlayed: og.PlaytimeHours}
+			achievements, fetchErr := a.client.GetAchievements(ctx, a.apiKey, a.steamID, og.AppID)
+			if fetchErr == nil {
+				progress.Achievements = achievements
+				at := time.Now().UTC()
+				progress.AchievementsObservedAt = &at
+			} else if ctx.Err() != nil {
+				return ctx.Err()
+			} else if !errors.Is(fetchErr, ErrProgressUnavailable) {
+				slog.WarnContext(ctx, "steam: achievements unavailable; preserving previous observation", "appid", og.AppID, logging.KeyErr, fetchErr)
+			}
+			unlocked, total := progress.Counts()
 
 			entries = append(entries, storefrontadapter.ExternalGameEntry{
+				SteamProgress:        progress,
 				ExternalID:           fmt.Sprintf("%d", og.AppID),
 				Title:                og.Title,
 				PlaytimeHours:        og.PlaytimeHours,
@@ -139,33 +152,12 @@ func (a *Adapter) GetLibrary(ctx context.Context, batchSize int, onBatch func([]
 	return nil
 }
 
-// fetchAchievements returns the unlocked/total achievement counts for one game,
-// or (nil, nil) when the game is unplayed, Steam has no public stats, or the
-// call errors. Achievement data must never fail the sync, so errors are logged
-// and swallowed.
-func (a *Adapter) fetchAchievements(ctx context.Context, og OwnedGame) (*int, *int) {
-	if og.PlaytimeHours <= 0 {
-		return nil, nil
-	}
-	unlocked, total, ok, err := a.client.GetPlayerAchievements(ctx, a.apiKey, a.steamID, og.AppID)
-	if err != nil {
-		slog.WarnContext(ctx, "steam: fetch achievements failed",
-			"appid", og.AppID, "title", og.Title, logging.KeyErr, err,
-			logging.Cat(logging.CategoryExternalAPI))
-		return nil, nil
-	}
-	if !ok {
-		return nil, nil
-	}
-	return &unlocked, &total
-}
-
 // fetchAppDetailsWithRetry calls GetAppDetailsPlatforms for one appid, retrying
-// indefinitely on ErrRateLimited with a fixed sleep between attempts. The first 429
+// on ErrRateLimited with bounded exponential backoff (five rounds). The first 429
 // for a given appid logs at WARN; subsequent retries log at DEBUG so we don't spam
 // the log while waiting out a sliding-window cooldown.
 func (a *Adapter) fetchAppDetailsWithRetry(ctx context.Context, og OwnedGame, gameIdx, totalGames int) (Platforms, error) {
-	for attempt := 1; ; attempt++ {
+	for attempt := 1; attempt <= 5; attempt++ {
 		pl, err := a.client.GetAppDetailsPlatforms(ctx, og.AppID)
 		if err == nil {
 			if attempt > 1 {
@@ -185,9 +177,13 @@ func (a *Adapter) fetchAppDetailsWithRetry(ctx context.Context, og OwnedGame, ga
 			return Platforms{}, fmt.Errorf("steam: appdetails failed for game %d/%d (%s, appid %d): %w",
 				gameIdx, totalGames, og.Title, og.AppID, err)
 		}
+		if attempt == 5 {
+			return Platforms{}, ErrRateLimited
+		}
+		wait := min(a.retryWait*time.Duration(1<<(attempt-1)), time.Minute)
 		if attempt == 1 {
 			slog.WarnContext(ctx, "steam: rate limited, sleeping before retry",
-				"wait", a.retryWait,
+				"wait", wait,
 				"appid", og.AppID,
 				"title", og.Title,
 				"game_index", gameIdx,
@@ -196,15 +192,16 @@ func (a *Adapter) fetchAppDetailsWithRetry(ctx context.Context, og OwnedGame, ga
 			)
 		} else {
 			slog.DebugContext(ctx, "steam: rate limited, sleeping before retry",
-				"wait", a.retryWait,
+				"wait", wait,
 				"appid", og.AppID,
 				"title", og.Title,
 				"game_index", gameIdx,
 				"attempt", attempt,
 			)
 		}
-		if err := steamSleepCtx(ctx, a.retryWait); err != nil {
+		if err := steamSleepCtx(ctx, wait); err != nil {
 			return Platforms{}, err
 		}
 	}
+	return Platforms{}, ErrRateLimited
 }

@@ -394,6 +394,7 @@ func registerRoutes(e *echo.Echo, encrypter *crypto.Encrypter, cfg *config.Confi
 		userGamesGroup.GET("/filter-options", ugh.HandleFilterOptions)
 		userGamesGroup.GET("/stats", ugh.HandleCollectionStats)
 		userGamesGroup.GET("/:id", ugh.HandleGetUserGame)
+		userGamesGroup.GET("/:id/steam-progress", ugh.HandleSteamProgress)
 		userGamesGroup.PUT("/:id", ugh.HandleUpdateUserGame)
 		userGamesGroup.DELETE("/:id", ugh.HandleDeleteUserGame)
 		userGamesGroup.PUT("/:id/progress", ugh.HandleUpdateProgress)

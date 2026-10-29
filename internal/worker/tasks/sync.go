@@ -22,6 +22,7 @@ import (
 	igdbsvc "github.com/drzero42/nexorious/internal/services/igdb"
 	"github.com/drzero42/nexorious/internal/services/matching"
 	"github.com/drzero42/nexorious/internal/services/platformresolution"
+	"github.com/drzero42/nexorious/internal/services/steamprogress"
 	"github.com/drzero42/nexorious/internal/services/storefrontadapter"
 	"github.com/drzero42/nexorious/internal/usergame"
 )
@@ -225,6 +226,11 @@ func (w *DispatchSyncWorker) Work(ctx context.Context, job *river.Job[DispatchSy
 			egID, isSkipped := upsertExternalGame(ctx, w.DB, e, p)
 			if egID == "" {
 				continue
+			}
+			if p.Storefront == "steam" && e.SteamProgress != nil {
+				if err := steamprogress.Save(ctx, w.DB, p.UserID, cfg.ID, egID, cfg.StorefrontCredentials, *e.SteamProgress); err != nil {
+					return err
+				}
 			}
 			seenPlatforms[egID] = append(seenPlatforms[egID], platforms...)
 			upsertPlatforms(ctx, w.DB, egID, platforms, e.PlaytimeHours, e.AchievementsUnlocked, e.AchievementsTotal)
@@ -710,6 +716,7 @@ func (w *UserGameWorker) Work(ctx context.Context, job *river.Job[UserGameArgs])
 	var egPlatforms []models.ExternalGamePlatform
 	if err := w.DB.NewSelect().Model(&egPlatforms).
 		Where("external_game_id = ?", eg.ID).
+		OrderExpr("CASE WHEN platform = 'pc-windows' THEN 0 ELSE 1 END, platform").
 		Scan(ctx); err != nil {
 		markItemFailed(ctx, w.DB, &item, fmt.Sprintf("load platforms: %v", err), "process_sync_item: markItemFailed")
 		SyncCheckJobCompletion(ctx, w.DB, w.RiverClient, item.JobID)
@@ -729,15 +736,53 @@ func (w *UserGameWorker) Work(ctx context.Context, job *river.Job[UserGameArgs])
 	} else if eg.IsSubscription {
 		ownership = "subscription"
 	}
+	// Steam metrics are scoped to the currently connected account. Never project
+	// legacy cached counts from a different account over a fresh observation.
+	var steamSnapshot *steamprogress.Progress
+	var err error
+	if eg.Storefront == "steam" {
+		steamSnapshot, err = steamprogress.LoadCurrent(ctx, w.DB, item.UserID, eg.ID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		var hasSnapshot bool
+		if err := w.DB.NewRaw(`SELECT EXISTS(SELECT 1 FROM steam_progress_snapshots WHERE external_game_id=?)`, eg.ID).Scan(ctx, &hasSnapshot); err != nil {
+			return err
+		}
+		if hasSnapshot && steamSnapshot == nil {
+			markItemFailed(ctx, w.DB, &item, "Steam account changed; sync again", "process_sync_item")
+			SyncCheckJobCompletion(ctx, w.DB, w.RiverClient, item.JobID)
+			return nil
+		}
+	}
 	plats := make([]usergame.PlatformInput, 0, len(egPlatforms))
-	for _, egp := range egPlatforms {
+	for index, egp := range egPlatforms {
 		egp := egp
+		var sourceAccountID *string
+		var sourceCredentialTag *string
+		observedAt := eg.UpdatedAt
+		if steamSnapshot != nil {
+			sourceAccountID = &steamSnapshot.AccountID
+			sourceCredentialTag = &steamSnapshot.CredentialTag
+			observedAt = steamSnapshot.ObservedAt
+			// Library playtime is a single app total, never a total per OS.
+			if index == 0 {
+				egp.HoursPlayed = steamSnapshot.HoursPlayed
+				egp.AchievementsUnlocked, egp.AchievementsTotal = steamSnapshot.Counts()
+			} else {
+				egp.HoursPlayed = 0
+				egp.AchievementsUnlocked = nil
+				egp.AchievementsTotal = nil
+			}
+		}
 		plats = append(plats, usergame.PlatformInput{
 			Platform: &egp.Platform, Storefront: &storefrontSlug,
 			HoursPlayed: &egp.HoursPlayed, OwnershipStatus: &ownership,
 			IsAvailable: boolptr(true), ExternalGameID: &eg.ID,
 			SyncFromSource:       true,
-			ObservedAt:           &eg.UpdatedAt,
+			ObservedAt:           &observedAt,
+			SourceAccountID:      sourceAccountID,
+			SourceCredentialTag:  sourceCredentialTag,
 			AchievementsUnlocked: egp.AchievementsUnlocked,
 			AchievementsTotal:    egp.AchievementsTotal,
 		})

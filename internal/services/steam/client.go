@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,7 @@ type Client struct {
 // NewClient creates a new Steam API client.
 func NewClient() *Client {
 	return &Client{
-		http:                &http.Client{Transport: observability.HTTPTransport()},
+		http:                &http.Client{Transport: observability.HTTPTransport(), Timeout: 30 * time.Second},
 		limiter:             rate.NewLimiter(rate.Every(200*time.Millisecond), 1),
 		achievementsLimiter: rate.NewLimiter(rate.Every(200*time.Millisecond), 1),
 		ownedGamesBase:      "https://api.steampowered.com",
@@ -77,11 +78,11 @@ func (c *Client) GetPlayerSummaries(ctx context.Context, apiKey, steamID string)
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("steam: failed to create request: %w", err)
+		return nil, errors.New("steam: invalid request")
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("steam network error: %w", err)
+		return nil, errors.New("steam: network request failed")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusTooManyRequests {
@@ -115,45 +116,38 @@ func (c *Client) GetPlayerSummaries(ctx context.Context, apiKey, steamID string)
 // GetOwnedGames fetches the full Steam library for the given steamID.
 // playtime_forever from the API is in minutes; this method converts it to hours.
 func (c *Client) GetOwnedGames(ctx context.Context, apiKey, steamID string) ([]OwnedGame, error) {
-	url := fmt.Sprintf(
-		"%s/IPlayerService/GetOwnedGames/v0001/?key=%s&steamid=%s&include_appinfo=true&format=json",
-		c.ownedGamesBase, apiKey, steamID,
-	)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("steam: failed to create request: %w", err)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("steam network error: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, ErrAPIKeyRejected
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("steam HTTP %d", resp.StatusCode)
-	}
 
 	var body struct {
 		Response struct {
 			Games []struct {
 				AppID           int    `json:"appid"`
 				Name            string `json:"name"`
-				PlaytimeForever int    `json:"playtime_forever"`
+				PlaytimeForever *int   `json:"playtime_forever"`
 			} `json:"games"`
+			GameCount *int `json:"game_count"`
 		} `json:"response"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("steam decode error: %w", err)
+	if err := c.webJSON(ctx, "/IPlayerService/GetOwnedGames/v0001/", url.Values{"key": {apiKey}, "steamid": {steamID}, "include_appinfo": {"true"}, "format": {"json"}}, &body); err != nil {
+		return nil, err
 	}
 
+	if body.Response.Games == nil && (body.Response.GameCount == nil || *body.Response.GameCount != 0) {
+		return nil, ErrProgressUnavailable
+	}
+	if body.Response.GameCount != nil && *body.Response.GameCount != len(body.Response.Games) {
+		return nil, ErrProgressUnavailable
+	}
+	seen := make(map[int]bool)
 	games := make([]OwnedGame, 0, len(body.Response.Games))
 	for _, g := range body.Response.Games {
+		if g.AppID <= 0 || seen[g.AppID] || g.PlaytimeForever == nil || *g.PlaytimeForever < 0 {
+			return nil, ErrProgressUnavailable
+		}
+		seen[g.AppID] = true
 		games = append(games, OwnedGame{
 			AppID:         g.AppID,
 			Title:         g.Name,
-			PlaytimeHours: float64(g.PlaytimeForever) / 60.0,
+			PlaytimeHours: float64(*g.PlaytimeForever) / 60.0,
 		})
 	}
 	return games, nil
@@ -256,7 +250,7 @@ func (c *Client) GetAppDetailsPlatforms(ctx context.Context, appID int) (Platfor
 func steamRetryAfterDelay(header string) time.Duration {
 	if header != "" {
 		if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs >= 0 {
-			return time.Duration(secs) * time.Second
+			return time.Duration(min(secs, 60)) * time.Second
 		}
 	}
 	return 10 * time.Second
@@ -290,11 +284,11 @@ func (c *Client) GetPlayerAchievements(ctx context.Context, apiKey, steamID stri
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, 0, false, fmt.Errorf("steam achievements: build request: %w", err)
+		return 0, 0, false, errors.New("steam achievements: invalid request")
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, 0, false, fmt.Errorf("steam achievements network error: %w", err)
+		return 0, 0, false, errors.New("steam achievements: network request failed")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	// 400/403 are Steam's response for private profiles on some apps; treat any

@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/drzero42/nexorious/internal/services/steamprogress"
 	"github.com/uptrace/bun"
 )
 
@@ -13,6 +14,17 @@ import (
 // sync has one selected source per platform; these are cumulative totals, never
 // deltas. Nil means no new measurement, including on private/partial responses.
 func writeProgress(ctx context.Context, tx bun.IDB, id string, in PlatformInput, merge bool) error {
+	if in.SyncFromSource && in.SourceCredentialTag != nil {
+		var credentials *string
+		if err := tx.NewRaw(`SELECT c.storefront_credentials FROM user_sync_configs c
+            JOIN user_games ug ON ug.user_id=c.user_id JOIN user_game_platforms p ON p.user_game_id=ug.id
+            WHERE p.id=? AND c.storefront='steam' FOR SHARE OF c`, id).Scan(ctx, &credentials); err != nil {
+			return err
+		}
+		if steamprogress.CredentialTag(credentials) != *in.SourceCredentialTag {
+			return fmt.Errorf("Steam account changed: %w", ErrValidation)
+		}
+	}
 	if err := validateProgress(in); err != nil {
 		return err
 	}
@@ -66,6 +78,14 @@ func writeProgress(ctx context.Context, tx bun.IDB, id string, in PlatformInput,
 	if in.SyncFromSource {
 		hoursExpr = "GREATEST(EXCLUDED.hours_played, progress_observations.hours_played)"
 	}
+	accountColumn, accountValue, accountUpdate := "", "", ""
+	args := []any{id, in.HoursPlayed, in.AchievementsUnlocked, in.AchievementsTotal}
+	if in.SyncFromSource && in.SourceAccountID != nil {
+		accountColumn = ", source_account_id"
+		accountValue = ", ?"
+		accountUpdate = ", source_account_id=EXCLUDED.source_account_id"
+		hoursExpr = "CASE WHEN progress_observations.source_account_id IS NOT DISTINCT FROM EXCLUDED.source_account_id THEN GREATEST(EXCLUDED.hours_played, progress_observations.hours_played) ELSE EXCLUDED.hours_played END"
+	}
 	timestamp := "updated_at"
 	if in.SyncFromSource {
 		timestamp = "observed_at"
@@ -85,15 +105,23 @@ func writeProgress(ctx context.Context, tx bun.IDB, id string, in PlatformInput,
 		unlockedExpr = "COALESCE(progress_manual_overrides.achievements_unlocked, EXCLUDED.achievements_unlocked)"
 		totalExpr = "COALESCE(progress_manual_overrides.achievements_total, EXCLUDED.achievements_total)"
 	}
+	if in.SyncFromSource && in.SourceAccountID != nil {
+		unlockedExpr = "CASE WHEN progress_observations.source_account_id IS NOT DISTINCT FROM EXCLUDED.source_account_id THEN " + unlockedExpr + " ELSE EXCLUDED.achievements_unlocked END"
+		totalExpr = "CASE WHEN progress_observations.source_account_id IS NOT DISTINCT FROM EXCLUDED.source_account_id THEN " + totalExpr + " ELSE EXCLUDED.achievements_total END"
+	}
+	args = append(args, observedAt)
+	if accountColumn != "" {
+		args = append(args, in.SourceAccountID)
+	}
 	query := fmt.Sprintf(`INSERT INTO %s
-        (user_game_platform_id, hours_played, achievements_unlocked, achievements_total, %s)
-        VALUES (?, ?, ?, ?, ?)
+        (user_game_platform_id, hours_played, achievements_unlocked, achievements_total, %s%s)
+        VALUES (?, ?, ?, ?, ?%s)
         ON CONFLICT (user_game_platform_id) DO UPDATE SET
         hours_played = %s,
         achievements_unlocked = %s,
         achievements_total = %s,
-        %s = EXCLUDED.%s%s`, table, timestamp, hoursExpr, unlockedExpr, totalExpr, timestamp, timestamp, guard)
-	if _, err := tx.NewRaw(query, id, in.HoursPlayed, in.AchievementsUnlocked, in.AchievementsTotal, observedAt).Exec(ctx); err != nil {
+        %s = EXCLUDED.%s%s%s`, table, timestamp, accountColumn, accountValue, hoursExpr, unlockedExpr, totalExpr, timestamp, timestamp, accountUpdate, guard)
+	if _, err := tx.NewRaw(query, args...).Exec(ctx); err != nil {
 		return fmt.Errorf("write progress: %w", err)
 	}
 	if !in.SyncFromSource {

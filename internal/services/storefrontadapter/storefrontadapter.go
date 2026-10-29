@@ -3,6 +3,8 @@ package storefrontadapter
 import (
 	"context"
 	"errors"
+
+	"github.com/drzero42/nexorious/internal/services/steamprogress"
 )
 
 // ExternalGameEntry is the normalised game representation yielded by any storefront adapter.
@@ -22,6 +24,7 @@ type ExternalGameEntry struct {
 	// (e.g. Epic's namespace). Persisted to external_games.source_metadata; never
 	// used to render store_link directly. Nil/empty for stores that need nothing.
 	SourceMetadata map[string]string
+	SteamProgress  *steamprogress.Progress
 }
 
 // Adapter is the interface every storefront adapter must satisfy.

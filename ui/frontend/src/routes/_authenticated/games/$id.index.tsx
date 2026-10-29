@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { SteamAchievements } from '@/components/games/steam-achievements';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useUserGame, useDeleteUserGame, useMoveToLibrary } from '@/hooks';
 import { Button } from '@/components/ui/button';
@@ -582,6 +583,13 @@ export function GameDetailPage() {
       </Card>
 
       {/* Personal Information Card */}
+      {game.platforms.some((p) => p.storefront === 'steam') && (
+        <Card>
+          <CardContent className="pt-6">
+            <SteamAchievements gameId={game.id} />
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Your Information</CardTitle>

@@ -85,10 +85,12 @@ func TestGetLibrary_PopulatesAchievements(t *testing.T) {
 				{"appid":10,"name":"Played","playtime_forever":120},
 				{"appid":20,"name":"Unplayed","playtime_forever":0}]}}`))
 		case strings.Contains(r.URL.Path, "GetPlayerAchievements"):
-			// Only the played game should reach here.
+			// Zero playtime does not prove that achievements are unavailable.
 			achHits.Add(1)
 			_, _ = w.Write([]byte(`{"playerstats":{"success":true,"achievements":[
 				{"apiname":"a","achieved":1},{"apiname":"b","achieved":0}]}}`))
+		case strings.Contains(r.URL.Path, "GetSchemaForGame"):
+			_, _ = w.Write([]byte(`{"game":{"availableGameStats":{"achievements":[{"name":"a","displayName":"A"},{"name":"b","displayName":"B"}]}}}`))
 		case strings.Contains(r.URL.Path, "appdetails"):
 			_, _ = w.Write([]byte(`{"10":{"success":true,"data":{"platforms":{"windows":true}}},
 				"20":{"success":true,"data":{"platforms":{"windows":true}}}}`))
@@ -109,8 +111,8 @@ func TestGetLibrary_PopulatesAchievements(t *testing.T) {
 		t.Fatalf("GetLibrary: %v", err)
 	}
 
-	if achHits.Load() != 1 {
-		t.Errorf("GetPlayerAchievements called %d times, want 1 (only the played game)", achHits.Load())
+	if achHits.Load() != 2 {
+		t.Errorf("GetPlayerAchievements called %d times, want 2 (including zero playtime)", achHits.Load())
 	}
 
 	byID := map[string]storefrontadapter.ExternalGameEntry{}
@@ -122,8 +124,8 @@ func TestGetLibrary_PopulatesAchievements(t *testing.T) {
 		played.AchievementsUnlocked == nil || *played.AchievementsUnlocked != 1 {
 		t.Errorf("played game: got %v/%v, want 1/2", played.AchievementsUnlocked, played.AchievementsTotal)
 	}
-	if unplayed := byID["20"]; unplayed.AchievementsTotal != nil || unplayed.AchievementsUnlocked != nil {
-		t.Errorf("unplayed game should have nil achievements, got %v/%v",
+	if unplayed := byID["20"]; unplayed.AchievementsTotal == nil || unplayed.AchievementsUnlocked == nil {
+		t.Errorf("unplayed game should have known achievements, got %v/%v",
 			unplayed.AchievementsUnlocked, unplayed.AchievementsTotal)
 	}
 }

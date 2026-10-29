@@ -81,3 +81,5 @@ MIT License — see LICENSE file for details.
 ---
 
 **Self-hosted game collection management made simple.**
+
+Documentation Phase 2B : [Progression Steam](docs/RK-PHASE-2B-STEAM.md).

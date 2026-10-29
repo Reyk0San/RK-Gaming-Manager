@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -41,14 +42,20 @@ func TestRoundTripper_LogsAndStripsQuery(t *testing.T) {
 	}
 }
 
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("simulated transport failure")
+}
+
 func TestRoundTripper_LogsTransportError(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(NewContextHandler(slog.NewJSONHandler(&buf, nil))))
 	defer slog.SetDefault(prev)
 
-	client := &http.Client{Transport: NewRoundTripper(http.DefaultTransport)}
-	// .invalid is a reserved TLD that never resolves.
+	client := &http.Client{Transport: NewRoundTripper(failingTransport{})}
+	// Simulate the failure: an HTTP proxy can return a response even for .invalid.
 	_, err := client.Get("http://nonexistent.invalid/x")
 	if err == nil {
 		t.Fatal("expected transport error")
