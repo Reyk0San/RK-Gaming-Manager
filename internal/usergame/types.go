@@ -46,7 +46,9 @@ type PlatformInput struct {
 	// only in the sync worker; REST-create and import callers leave it false.
 	SyncFromSource bool
 	// ObservedAt is the snapshot time, so delayed retries cannot replace newer data.
-	ObservedAt *time.Time
+	ObservedAt          *time.Time
+	SourceAccountID     *string
+	SourceCredentialTag *string
 	// Progress preserves provenance on a fresh JSON import; identities are never imported.
 	Progress *ProgressState
 	// AchievementsUnlocked / AchievementsTotal carry Steam achievement counts on
@@ -124,7 +126,9 @@ type ProgressMetrics struct {
 	AchievementsTotal    *int     `json:"achievements_total"`
 }
 type ProgressState struct {
-	Manual     ProgressMetrics `json:"manual"`
-	Observed   ProgressMetrics `json:"observed"`
-	ObservedAt *time.Time      `json:"observed_at,omitempty"`
+	Manual              ProgressMetrics `json:"manual"`
+	Observed            ProgressMetrics `json:"observed"`
+	ObservedAt          *time.Time
+	SourceAccountID     *string
+	SourceCredentialTag *string `json:"observed_at,omitempty"`
 }

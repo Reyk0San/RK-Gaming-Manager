@@ -38,13 +38,16 @@ type Metrics struct {
 // Achievement identity is scoped to provider/account/game/platform/set/mode.
 // Mode preserves distinctions such as RetroAchievements softcore/hardcore.
 type Achievement struct {
-	ID         string
-	SetID      string
-	Mode       string
-	Name       string
-	Unlocked   *bool
-	UnlockedAt *time.Time
-	Points     *int
+	ID          string
+	SetID       string
+	Mode        string
+	Description string
+	Icon        string
+	IconGray    string
+	Name        string
+	Unlocked    *bool
+	UnlockedAt  *time.Time
+	Points      *int
 }
 
 type Snapshot struct {
