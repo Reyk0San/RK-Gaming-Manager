@@ -467,7 +467,7 @@ func (w *IGDBMatchWorker) Work(ctx context.Context, job *river.Job[IGDBMatchArgs
 	}
 
 	var eg models.ExternalGame
-	if err := w.DB.NewSelect().Model(&eg).Where("id = ?", *item.ExternalGameID).Scan(ctx); err != nil {
+	if err := w.DB.NewSelect().Model(&eg).Where("id = ?", *item.ExternalGameID).Where("user_id = ?", item.UserID).Scan(ctx); err != nil {
 		markItemFailed(ctx, w.DB, &item, "external game not found", "process_sync_item: markItemFailed")
 		SyncCheckJobCompletion(ctx, w.DB, w.RiverClient, item.JobID)
 		return nil
@@ -649,7 +649,7 @@ func (w *UserGameWorker) Work(ctx context.Context, job *river.Job[UserGameArgs])
 	}
 
 	var eg models.ExternalGame
-	if err := w.DB.NewSelect().Model(&eg).Where("id = ?", *item.ExternalGameID).Scan(ctx); err != nil {
+	if err := w.DB.NewSelect().Model(&eg).Where("id = ?", *item.ExternalGameID).Where("user_id = ?", item.UserID).Scan(ctx); err != nil {
 		markItemFailed(ctx, w.DB, &item, "external game not found", "process_sync_item: markItemFailed")
 		SyncCheckJobCompletion(ctx, w.DB, w.RiverClient, item.JobID)
 		return nil
@@ -737,6 +737,7 @@ func (w *UserGameWorker) Work(ctx context.Context, job *river.Job[UserGameArgs])
 			HoursPlayed: &egp.HoursPlayed, OwnershipStatus: &ownership,
 			IsAvailable: boolptr(true), ExternalGameID: &eg.ID,
 			SyncFromSource:       true,
+			ObservedAt:           &eg.UpdatedAt,
 			AchievementsUnlocked: egp.AchievementsUnlocked,
 			AchievementsTotal:    egp.AchievementsTotal,
 		})

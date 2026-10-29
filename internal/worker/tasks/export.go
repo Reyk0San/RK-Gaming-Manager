@@ -18,6 +18,7 @@ import (
 	"github.com/drzero42/nexorious/internal/db/models"
 	"github.com/drzero42/nexorious/internal/logging"
 	"github.com/drzero42/nexorious/internal/notify"
+	"github.com/drzero42/nexorious/internal/usergame"
 )
 
 // ── JSON export ───────────────────────────────────────────────────────────────
@@ -130,6 +131,8 @@ func loadUserGamesWithRelations(ctx context.Context, db *bun.DB, userID string) 
 		Model(&ugs).
 		Relation("Game").
 		Relation("Platforms").
+		Relation("Platforms.ManualProgress").
+		Relation("Platforms.ObservedProgress").
 		Relation("Tags").
 		Relation("Tags.Tag").
 		Where("user_game.user_id = ?", userID).
@@ -205,12 +208,15 @@ type exportGameJSON struct {
 }
 
 type exportPlatformJSON struct {
-	Platform        *string  `json:"platform"`
-	Storefront      *string  `json:"storefront"`
-	OwnershipStatus *string  `json:"ownership_status"`
-	AcquiredDate    *string  `json:"acquired_date"`
-	HoursPlayed     *float64 `json:"hours_played"`
-	IsAvailable     bool     `json:"is_available"`
+	AchievementsUnlocked *int                    `json:"achievements_unlocked"`
+	AchievementsTotal    *int                    `json:"achievements_total"`
+	Progress             *usergame.ProgressState `json:"progress,omitempty"`
+	Platform             *string                 `json:"platform"`
+	Storefront           *string                 `json:"storefront"`
+	OwnershipStatus      *string                 `json:"ownership_status"`
+	AcquiredDate         *string                 `json:"acquired_date"`
+	HoursPlayed          *float64                `json:"hours_played"`
+	IsAvailable          bool                    `json:"is_available"`
 }
 
 type exportTagJSON struct {
@@ -320,11 +326,24 @@ func buildJSONDoc(ugs []models.UserGame, pools []exportPoolJSON) exportDocJSON {
 		platforms := make([]exportPlatformJSON, 0, len(ug.Platforms))
 		for _, p := range ug.Platforms {
 			pj := exportPlatformJSON{
-				Platform:        p.Platform,
-				Storefront:      p.Storefront,
-				OwnershipStatus: p.OwnershipStatus,
-				HoursPlayed:     p.HoursPlayed,
-				IsAvailable:     p.IsAvailable,
+				Platform:             p.Platform,
+				Storefront:           p.Storefront,
+				OwnershipStatus:      p.OwnershipStatus,
+				HoursPlayed:          p.HoursPlayed,
+				IsAvailable:          p.IsAvailable,
+				AchievementsUnlocked: p.AchievementsUnlocked,
+				AchievementsTotal:    p.AchievementsTotal,
+			}
+			if p.ManualProgress != nil || p.ObservedProgress != nil {
+				state := &usergame.ProgressState{}
+				if m := p.ManualProgress; m != nil {
+					state.Manual = usergame.ProgressMetrics{HoursPlayed: m.HoursPlayed, AchievementsUnlocked: m.AchievementsUnlocked, AchievementsTotal: m.AchievementsTotal}
+				}
+				if o := p.ObservedProgress; o != nil {
+					state.Observed = usergame.ProgressMetrics{HoursPlayed: o.HoursPlayed, AchievementsUnlocked: o.AchievementsUnlocked, AchievementsTotal: o.AchievementsTotal}
+					state.ObservedAt = &o.ObservedAt
+				}
+				pj.Progress = state
 			}
 			if p.AcquiredDate != nil {
 				d := p.AcquiredDate.Format("2006-01-02")

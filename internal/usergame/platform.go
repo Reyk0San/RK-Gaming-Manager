@@ -44,6 +44,18 @@ func UpdatePlatform(ctx context.Context, db *bun.DB, p UpdatePlatformParams) err
 			return err
 		}
 
+		// Scope the fallback snapshot before writing any values. Ownership of
+		// PlatformID must be checked independently of ownership of UserGameID.
+		var exists bool
+		if err := tx.NewRaw(`SELECT EXISTS (SELECT 1 FROM user_game_platforms WHERE id = ? AND user_game_id = ?)`, p.PlatformID, p.UserGameID).Scan(ctx, &exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrNotFound
+		}
+		if err := preserveUntrackedProgress(ctx, tx, p.PlatformID); err != nil {
+			return err
+		}
 		// Build a dynamic SET clause from the non-nil fields.
 		q := tx.NewUpdate().TableExpr("user_game_platforms").
 			Where("id = ?", p.PlatformID).
@@ -73,6 +85,12 @@ func UpdatePlatform(ctx context.Context, db *bun.DB, p UpdatePlatformParams) err
 		if p.Fields.ExternalGameID != nil {
 			q = q.Set("external_game_id = ?", *p.Fields.ExternalGameID)
 		}
+		if p.Fields.AchievementsUnlocked != nil {
+			q = q.Set("achievements_unlocked = ?", *p.Fields.AchievementsUnlocked)
+		}
+		if p.Fields.AchievementsTotal != nil {
+			q = q.Set("achievements_total = ?", *p.Fields.AchievementsTotal)
+		}
 		// sync_from_source is intentionally never updated here.
 
 		result, err := q.Exec(ctx)
@@ -87,6 +105,11 @@ func UpdatePlatform(ctx context.Context, db *bun.DB, p UpdatePlatformParams) err
 			return ErrNotFound
 		}
 
+		fields := p.Fields
+		fields.SyncFromSource = false // an explicit edit is always manual
+		if err := writeProgress(ctx, tx, p.PlatformID, fields, false); err != nil {
+			return err
+		}
 		return promoteToInProgressIfPlayed(ctx, tx, p.UserGameID)
 	})
 }

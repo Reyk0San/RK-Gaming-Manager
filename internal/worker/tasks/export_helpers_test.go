@@ -250,3 +250,17 @@ func TestBuildJSONDoc(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildJSONPreservesManualZeroAndMaskedObservation(t *testing.T) {
+	zero, twenty := 0.0, 20.0
+	n := 7
+	doc := buildJSONDoc([]models.UserGame{{Platforms: []models.UserGamePlatform{{
+		HoursPlayed:      &zero,
+		ManualProgress:   &models.ProgressManualOverride{HoursPlayed: &zero},
+		ObservedProgress: &models.ProgressObservation{HoursPlayed: &twenty, AchievementsUnlocked: &n},
+	}}}}, nil)
+	state := doc.Games[0].Platforms[0].Progress
+	if state == nil || state.Manual.HoursPlayed == nil || *state.Manual.HoursPlayed != 0 || state.Observed.HoursPlayed == nil || *state.Observed.HoursPlayed != 20 {
+		t.Fatalf("provenance missing from export: %+v", state)
+	}
+}

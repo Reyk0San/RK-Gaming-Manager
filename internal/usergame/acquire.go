@@ -95,11 +95,11 @@ func upsertUserGame(ctx context.Context, tx bun.IDB, p AcquireParams) (string, b
 		}
 		err := tx.NewRaw(
 			`INSERT INTO user_games
-			 (id, user_id, game_id, play_status, personal_rating, is_loved, personal_notes, is_wishlisted, created_at, updated_at)
-			 VALUES (?, ?, ?, COALESCE(?, 'not_started'), ?, ?, ?, ?, ?, ?)
+			 (id, user_id, game_id, play_status, personal_rating, is_loved, personal_notes, is_wishlisted, created_at, updated_at, play_status_manual)
+			 VALUES (?, ?, ?, COALESCE(?, 'not_started'), ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (user_id, game_id) DO UPDATE SET updated_at = user_games.updated_at
 			 RETURNING id, (xmax = 0) AS is_new`,
-			id, p.UserID, p.GameID, p.PlayStatus, p.PersonalRating, p.IsLoved, p.PersonalNotes, p.IsWishlisted, createdAt, updatedAt,
+			id, p.UserID, p.GameID, p.PlayStatus, p.PersonalRating, p.IsLoved, p.PersonalNotes, p.IsWishlisted, createdAt, updatedAt, p.PlayStatus != nil,
 		).Scan(ctx, &row)
 		if err != nil {
 			return "", false, fmt.Errorf("import upsert user_game: %w", err)
@@ -111,9 +111,9 @@ func upsertUserGame(ctx context.Context, tx bun.IDB, p AcquireParams) (string, b
 	// pointer falls through to the column default rather than violating the constraint.
 	_, err := tx.NewRaw(
 		`INSERT INTO user_games
-		 (id, user_id, game_id, play_status, personal_rating, is_loved, personal_notes, is_wishlisted, created_at, updated_at)
-		 VALUES (?, ?, ?, COALESCE(?, 'not_started'), ?, ?, ?, ?, ?, ?)`,
-		id, p.UserID, p.GameID, p.PlayStatus, p.PersonalRating, p.IsLoved, p.PersonalNotes, p.IsWishlisted, now, now,
+		 (id, user_id, game_id, play_status, personal_rating, is_loved, personal_notes, is_wishlisted, created_at, updated_at, play_status_manual)
+		 VALUES (?, ?, ?, COALESCE(?, 'not_started'), ?, ?, ?, ?, ?, ?, ?)`,
+		id, p.UserID, p.GameID, p.PlayStatus, p.PersonalRating, p.IsLoved, p.PersonalNotes, p.IsWishlisted, now, now, p.PlayStatus != nil,
 	).Exec(ctx)
 	if err != nil {
 		if nexdb.IsUniqueViolation(err) {
@@ -145,26 +145,21 @@ func mergeOnePlatform(ctx context.Context, tx bun.IDB, ugID string, in PlatformI
 	if in.IsAvailable != nil {
 		available = *in.IsAvailable
 	}
-	var hours float64
-	if in.HoursPlayed != nil {
-		hours = *in.HoursPlayed
-	}
 	ch := PlatformChange{Platform: deref(in.Platform), Storefront: deref(in.Storefront)}
 
 	var existingID string
 	var existingOwnership *string
-	var existingHours *float64
+	var ownershipManual bool
 	err := tx.NewRaw(
-		`SELECT id, ownership_status, hours_played FROM user_game_platforms
-		 WHERE user_game_id = ? AND platform = ? AND storefront = ?`,
+		`SELECT id, ownership_status, ownership_manual FROM user_game_platforms
+		 WHERE user_game_id = ? AND platform = ? AND storefront IS NOT DISTINCT FROM ? FOR UPDATE`,
 		ugID, in.Platform, in.Storefront,
-	).Scan(ctx, &existingID, &existingOwnership, &existingHours)
+	).Scan(ctx, &existingID, &existingOwnership, &ownershipManual)
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		ch.Created = true
 		// Bind in.HoursPlayed (*float64) directly so nil → SQL NULL.
-		// Do NOT use the coerced `hours` local here (nil → 0 is wrong for INSERT).
 		// Bind in.AchievementsUnlocked / in.AchievementsTotal (*int) directly so nil → SQL NULL.
 		_, err := tx.NewRaw(
 			`INSERT INTO user_game_platforms
@@ -179,30 +174,37 @@ func mergeOnePlatform(ctx context.Context, tx bun.IDB, ugID string, in PlatformI
 	case err != nil:
 		return ch, fmt.Errorf("select existing platform: %w", err)
 	default:
+		if err := preserveUntrackedProgress(ctx, tx, existingID); err != nil {
+			return ch, err
+		}
 		finalOwnership := ownership
 		if existingOwnership != nil {
 			finalOwnership = *existingOwnership
 		}
-		if ownershipRank(ownership) > ownershipRankPtr(existingOwnership) {
+		if (!in.SyncFromSource || !ownershipManual) && ownershipRank(ownership) > ownershipRankPtr(existingOwnership) {
 			ch.OwnershipUpgraded = true
 			ch.OldOwnership = existingOwnership
 			o := ownership
 			ch.NewOwnership = &o
 			finalOwnership = ownership
 		}
-		// UPDATE branch: use coerced `hours` (0 if nil) for max comparison.
-		// This is correct — the UPDATE always writes a concrete value.
-		finalHours := hours
-		if existingHours != nil && *existingHours > finalHours {
-			finalHours = *existingHours
-		}
 		_, err := tx.NewRaw(
-			`UPDATE user_game_platforms SET ownership_status = ?, hours_played = ?, external_game_id = COALESCE(?, external_game_id), achievements_unlocked = COALESCE(?, achievements_unlocked), achievements_total = COALESCE(?, achievements_total), updated_at = now() WHERE id = ?`,
-			finalOwnership, finalHours, in.ExternalGameID, in.AchievementsUnlocked, in.AchievementsTotal, existingID,
+			`UPDATE user_game_platforms SET ownership_status = ?, external_game_id = COALESCE(?, external_game_id), updated_at = now() WHERE id = ?`,
+			finalOwnership, in.ExternalGameID, existingID,
 		).Exec(ctx)
 		if err != nil {
 			return ch, fmt.Errorf("update platform: %w", err)
 		}
+	}
+	// The parent user_game is locked by Acquire's upsert before this lookup.
+	// Resolve identity again after INSERT, including nullable storefronts.
+	if err := tx.NewRaw(`SELECT id FROM user_game_platforms WHERE user_game_id = ?
+		AND platform = ? AND storefront IS NOT DISTINCT FROM ? FOR UPDATE`,
+		ugID, in.Platform, in.Storefront).Scan(ctx, &existingID); err != nil {
+		return ch, err
+	}
+	if err := writeProgress(ctx, tx, existingID, in, !ch.Created); err != nil {
+		return ch, err
 	}
 	return ch, nil
 }
@@ -330,7 +332,7 @@ func MoveToLibrary(ctx context.Context, db *bun.DB, p MoveParams) (Result, error
 func assertOwned(ctx context.Context, tx bun.IDB, ugID, userID string) error {
 	var x int
 	err := tx.NewRaw(
-		`SELECT 1 FROM user_games WHERE id = ? AND user_id = ?`, ugID, userID,
+		`SELECT 1 FROM user_games WHERE id = ? AND user_id = ? FOR UPDATE`, ugID, userID,
 	).Scan(ctx, &x)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
@@ -343,7 +345,7 @@ func assertOwned(ctx context.Context, tx bun.IDB, ugID, userID string) error {
 func assertWishlisted(ctx context.Context, tx bun.IDB, ugID, userID string) error {
 	var wishlisted bool
 	err := tx.NewRaw(
-		`SELECT is_wishlisted FROM user_games WHERE id = ? AND user_id = ?`, ugID, userID,
+		`SELECT is_wishlisted FROM user_games WHERE id = ? AND user_id = ? FOR UPDATE`, ugID, userID,
 	).Scan(ctx, &wishlisted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
@@ -381,6 +383,9 @@ func insertPlatformStrict(ctx context.Context, tx bun.IDB, ugID string, in Platf
 			return "", fmt.Errorf("platform already exists: %w", ErrConflict)
 		}
 		return "", fmt.Errorf("insert platform: %w", err)
+	}
+	if err := writeProgress(ctx, tx, id, in, false); err != nil {
+		return "", err
 	}
 	return id, nil
 }

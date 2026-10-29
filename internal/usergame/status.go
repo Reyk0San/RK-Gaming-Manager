@@ -45,7 +45,7 @@ func UpdateFields(ctx context.Context, db *bun.DB, p UpdateFieldsParams) error {
 		args := []any{}
 
 		if p.PlayStatus != nil {
-			setClauses = append(setClauses, "play_status = ?")
+			setClauses = append(setClauses, "play_status = ?, play_status_manual = true")
 			args = append(args, *p.PlayStatus)
 		}
 		switch {
@@ -123,7 +123,7 @@ func RecordProgress(ctx context.Context, db *bun.DB, p ProgressParams) error {
 		}
 
 		res, err := tx.NewRaw(
-			`UPDATE user_games SET play_status = ?, updated_at = NOW() WHERE id = ? AND user_id = ?`,
+			`UPDATE user_games SET play_status = ?, play_status_manual = true, updated_at = NOW() WHERE id = ? AND user_id = ?`,
 			p.PlayStatus, p.UserGameID, p.UserID,
 		).Exec(ctx)
 		if err != nil {
@@ -157,7 +157,7 @@ func SetPlayStatusBulk(ctx context.Context, db *bun.DB, p BulkStatusParams) (int
 	err := db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		for _, ugID := range p.UserGameIDs {
 			res, err := tx.NewRaw(
-				`UPDATE user_games SET play_status = ?, updated_at = NOW() WHERE id = ? AND user_id = ?`,
+				`UPDATE user_games SET play_status = ?, play_status_manual = true, updated_at = NOW() WHERE id = ? AND user_id = ?`,
 				p.PlayStatus, ugID, p.UserID,
 			).Exec(ctx)
 			if err != nil {

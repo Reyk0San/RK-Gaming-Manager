@@ -1686,14 +1686,21 @@ func TestUserGameWorker_OwnershipRankGuard(t *testing.T) {
 	if resultOwnership != "owned" {
 		t.Errorf("ownership should not be downgraded: want 'owned', got %q", resultOwnership)
 	}
-	// hours_played should be updated to the higher value (20.0 > 10.0).
+	// Ambiguous existing hours are manual; the higher source value stays separate.
 	var resultHours float64
 	_ = testDB.NewRaw(
 		`SELECT hours_played FROM user_game_platforms WHERE user_game_id = ? AND platform = 'playstation-4' AND storefront = 'playstation-store'`,
 		ugID,
 	).Scan(ctx, &resultHours)
-	if resultHours != 20.0 {
-		t.Errorf("hours_played should update to higher value: want 20.0, got %v", resultHours)
+	if resultHours != 10.0 {
+		t.Errorf("manual hours must survive sync: want 10.0, got %v", resultHours)
+	}
+	var observedHours float64
+	if err := testDB.NewRaw(`SELECT o.hours_played FROM progress_observations o JOIN user_game_platforms p ON p.id=o.user_game_platform_id WHERE p.user_game_id=?`, ugID).Scan(ctx, &observedHours); err != nil {
+		t.Fatal(err)
+	}
+	if observedHours != 20 {
+		t.Errorf("source observation: want 20, got %v", observedHours)
 	}
 	// No change row: game already existed (not a new addition).
 	var changeCount int

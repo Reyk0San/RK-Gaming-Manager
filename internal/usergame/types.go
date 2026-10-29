@@ -37,11 +37,18 @@ type PlatformInput struct {
 	// ClearAcquiredDate instructs UpdatePlatform to set acquired_date to NULL.
 	// It is distinct from AcquiredDate==nil (which means "leave unchanged") and
 	// is used when the caller explicitly supplies an empty string for the field.
-	ClearAcquiredDate bool
-	ExternalGameID    *string
+	ClearAcquiredDate                 bool
+	ClearHoursOverride                bool
+	ClearAchievementsUnlockedOverride bool
+	ClearAchievementsTotalOverride    bool
+	ExternalGameID                    *string
 	// SyncFromSource marks the platform row as storefront-synced. Set to true
 	// only in the sync worker; REST-create and import callers leave it false.
 	SyncFromSource bool
+	// ObservedAt is the snapshot time, so delayed retries cannot replace newer data.
+	ObservedAt *time.Time
+	// Progress preserves provenance on a fresh JSON import; identities are never imported.
+	Progress *ProgressState
 	// AchievementsUnlocked / AchievementsTotal carry Steam achievement counts on
 	// the sync path. Nil leaves the columns NULL on insert and unchanged on update.
 	AchievementsUnlocked *int
@@ -109,4 +116,15 @@ func ownershipRank(status string) int {
 	default:
 		return 0
 	}
+}
+
+type ProgressMetrics struct {
+	HoursPlayed          *float64 `json:"hours_played"`
+	AchievementsUnlocked *int     `json:"achievements_unlocked"`
+	AchievementsTotal    *int     `json:"achievements_total"`
+}
+type ProgressState struct {
+	Manual     ProgressMetrics `json:"manual"`
+	Observed   ProgressMetrics `json:"observed"`
+	ObservedAt *time.Time      `json:"observed_at,omitempty"`
 }
