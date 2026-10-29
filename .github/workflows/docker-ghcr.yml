@@ -1,0 +1,88 @@
+name: Publish RK Gaming Manager to GHCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: 'Publish the validated develop commit to GHCR'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+# Serialize publications so two runs cannot update develop concurrently.
+concurrency:
+  group: rk-gaming-manager-ghcr-develop
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'Reyk0San/RK-Gaming-Manager' &&
+      github.ref == 'refs/heads/develop' &&
+      inputs.confirm_publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      IMAGE: ghcr.io/reyk0san/rk-gaming-manager
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout the selected commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish runtime image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: runtime
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:develop
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          build-args: |
+            VERSION=develop
+            COMMIT=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Reyk0San/RK-Gaming-Manager
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record immutable image reference
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo '::error::Missing or invalid image SHA256 digest'
+            exit 1
+          fi
+          {
+            printf '### RK Gaming Manager published\n\n'
+            printf 'Commit: `%s`\n\n' "$GITHUB_SHA"
+            printf 'Platform: `linux/amd64`\n\n'
+            printf 'Tags: `%s:develop`, `%s:sha-%s`\n\n' "$IMAGE" "$IMAGE" "$GITHUB_SHA"
+            printf 'Reproducible pull reference: `%s@%s`\n' "$IMAGE" "$DIGEST"
+          } >> "$GITHUB_STEP_SUMMARY"
