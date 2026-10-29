@@ -7,14 +7,47 @@ La création de la branche et de la PR ne lance aucune publication.
 
 ## Validation puis publication manuelle
 
-1. Relire et valider la PR, puis la fusionner volontairement dans `develop`.
-2. Vérifier les restrictions ci-dessous. Le workflow doit aussi être présent sur
-   la branche par défaut pour être déclenchable ; cette PR ne modifie pas `main`.
-3. Après validation, ouvrir **Actions → Publish RK Gaming Manager to GHCR →
-   Run workflow**, sélectionner **develop**, puis cocher `confirm_publish`.
-   Cette action publie réellement ; la confirmation est désactivée par défaut.
-4. Consulter le résumé de l'exécution réussie et conserver le commit complet
+1. Relire et approuver la [PR #4](https://github.com/Reyk0San/RK-Gaming-Manager/pull/4),
+   puis la fusionner manuellement dans `develop`. Ne pas lancer le workflow.
+2. Relire et approuver la [PR #5](https://github.com/Reyk0San/RK-Gaming-Manager/pull/5),
+   puis la fusionner manuellement dans `main`. Cette PR part de `main` et ajoute
+   uniquement le même workflow ; aucun code applicatif de `develop` n'y entre.
+   Les deux fusions ne déclenchent aucune publication.
+3. Vérifier les politiques Actions et permissions GHCR décrites ci-dessous,
+   la validation du code de `develop`, puis l'identité des workflows :
+
+   ```sh
+   git fetch origin main develop
+   git diff --exit-code origin/main origin/develop -- .github/workflows/docker-ghcr.yml
+   ```
+
+   Le diff doit être vide (code retour 0). En cas d'écart, synchroniser uniquement
+   ce fichier par PR approuvées avant publication. Toute mise à jour future du
+   workflow, y compris des SHA d'actions, doit être reportée dans les deux branches
+   et cette comparaison doit être répétée avant chaque lancement.
+4. Après autorisation de publier, ouvrir **Actions → Publish RK Gaming Manager
+   to GHCR → Run workflow**, sélectionner explicitement **develop**, puis cocher
+   `confirm_publish` et lancer. Il faut le droit **Write** sur le dépôt. Cette
+   action publie réellement ; la confirmation est désactivée par défaut.
+   Le workflow de la branche sélectionnée est exécuté, avec un checkout du
+   `github.sha` associé au dispatch ; aucun code de `main` n'est construit.
+5. Consulter le résumé de l'exécution réussie et conserver le commit complet
    et la référence `ghcr.io/reyk0san/rk-gaming-manager@sha256:…`.
+
+Alternative CLI, uniquement après autorisation (non exécutée lors de la préparation) :
+
+```sh
+gh workflow run docker-ghcr.yml --repo Reyk0San/RK-Gaming-Manager --ref develop -f confirm_publish=true
+```
+
+Une sélection de `main`, d'une autre branche ou d'un tag ignore entièrement le
+job `publish`, même avec confirmation : aucune authentification, construction ou
+publication n'est alors exécutée. La vérification de ces conditions est statique ;
+aucun dispatch de test n'a été effectué.
+
+Référence officielle : [lancement manuel d'un workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+GitHub exige le fichier sur la branche par défaut, mais permet de choisir une autre
+branche dans l'interface ou avec `--ref`.
 
 Aucun déclencheur `push`, `pull_request` ou `pull_request_target` n'est présent.
 Le job refuse toute branche autre que `develop` et tout autre dépôt. Protéger
@@ -67,9 +100,9 @@ pas modifiés ; ne pas les appliquer aveuglément à une installation existante.
   Docker Hub, npm, Go, Alpine et PyPI utilisés par le Dockerfile.
 - GitHub exige la présence du workflow sur la branche par défaut (`main` actuellement)
   pour accepter `workflow_dispatch`, y compris via API/CLI. Après la seule fusion
-  vers `develop`, le bouton peut être absent ou le dispatch refusé. Prévoir une
-  intégration approuvée du workflow sur la branche par défaut ou un changement
-  approuvé de branche par défaut ; aucun de ces changements n'est effectué ici.
+  vers `develop`, le bouton peut être absent ou le dispatch refusé. La PR #5
+  prépare l'ajout du seul workflow sur `main` ; elle doit être approuvée et fusionnée
+  séparément, selon l'ordre indiqué plus haut. La branche par défaut reste `main`.
   Sélectionner ensuite explicitement `develop` ; `main` est refusé par le job.
 - Un package nouvellement publié est normalement **privé**, même pour un dépôt public.
   Dans le profil GitHub → **Packages → rk-gaming-manager → Package settings**,
